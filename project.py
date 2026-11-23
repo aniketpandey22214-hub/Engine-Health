@@ -19,7 +19,7 @@ BASE_DIR = Path(__file__).resolve().parent
 # Build the small gauge interface automatically from this single Python file.
 DIAL_DIR = BASE_DIR / "tractor_dial_component"
 DIAL_DIR.mkdir(exist_ok=True)
-DIAL_HTML = '<!doctype html>\n<html>\n<head>\n<meta charset="utf-8">\n<style>\n  html, body { margin:0; padding:0; background:transparent; overflow:hidden;\n    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }\n  .wrap { width:100%; height:205px; display:flex; align-items:center; justify-content:center; }\n  svg { width:100%; max-width:310px; height:205px; overflow:visible; touch-action:none; user-select:none; }\n  .track { fill:none; stroke:#263d57; stroke-width:18; stroke-linecap:butt; }\n  .progress { fill:none; stroke:#38bdf8; stroke-width:7; stroke-linecap:butt; }\n  .needle { stroke:#2dd4bf; stroke-width:3.5; stroke-linecap:round; }\n  .hub { fill:#2dd4bf; stroke:#0b1220; stroke-width:2; }\n  .tick { stroke:#8ca4bd; stroke-width:1; opacity:.8; }\n  .tick-label { fill:#9fb2c9; font-size:9px; }\n  .value { fill:#e7eef8; font-size:21px; font-weight:600; text-anchor:middle; }\n  .title { fill:#a9bfd3; font-size:11px; text-anchor:middle; font-weight:600; letter-spacing:.3px; }\n  .hit { fill:transparent; stroke:transparent; stroke-width:42; cursor:grab; }\n  .hit:active { cursor:grabbing; }\n</style>\n</head>\n<body>\n<div class="wrap">\n<svg id="dial" viewBox="0 0 300 205" role="img" aria-label="Adjustable semicircular gauge">\n  <path id="track" class="track"></path>\n  <path id="progress" class="progress"></path>\n  <g id="ticks"></g>\n  <text id="title" class="title" x="150" y="18"></text>\n  <text id="value" class="value" x="150" y="145"></text>\n  <line id="needle" class="needle"></line>\n  <circle id="hub" class="hub" r="5"></circle>\n  <path id="hit" class="hit"></path>\n</svg>\n</div>\n<script>\n(function () {\n  const svg = document.getElementById("dial");\n  const track = document.getElementById("track");\n  const progress = document.getElementById("progress");\n  const ticks = document.getElementById("ticks");\n  const title = document.getElementById("title");\n  const valueText = document.getElementById("value");\n  const needle = document.getElementById("needle");\n  const hub = document.getElementById("hub");\n  const hit = document.getElementById("hit");\n  const cx = 150, cy = 150, radius = 116;\n  let min = 0, max = 100, value = 50, step = 1, suffix = "", dragging = false;\n\n  function point(deg, r) {\n    const a = deg * Math.PI / 180;\n    return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };\n  }\n  function arcPath(r, start, end) {\n    const p1 = point(start, r), p2 = point(end, r);\n    return `M ${p1.x} ${p1.y} A ${r} ${r} 0 0 1 ${p2.x} ${p2.y}`;\n  }\n  function fmt(v) {\n    const decimals = step < 1 ? Math.max(1, (String(step).split(".")[1] || "").length) : 0;\n    return Number(v).toFixed(decimals) + suffix;\n  }\n  function render() {\n    const ratio = Math.max(0, Math.min(1, (value - min) / (max - min)));\n    const angle = 180 + ratio * 180;\n    track.setAttribute("d", arcPath(radius, 180, 360));\n    progress.setAttribute("d", arcPath(radius, 180, angle));\n    title.textContent = titleText;\n    valueText.textContent = fmt(value);\n    const p = point(angle, radius - 1);\n    const inner = point(angle, radius - 19);\n    needle.setAttribute("x1", inner.x); needle.setAttribute("y1", inner.y);\n    needle.setAttribute("x2", p.x); needle.setAttribute("y2", p.y);\n    hub.setAttribute("cx", cx); hub.setAttribute("cy", cy);\n    ticks.innerHTML = "";\n    for (let i = 0; i <= 4; i++) {\n      const a = 180 + i * 45, p1 = point(a, radius + 4), p2 = point(a, radius + 11);\n      const label = point(a, radius + 24);\n      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");\n      line.setAttribute("x1",p1.x); line.setAttribute("y1",p1.y);\n      line.setAttribute("x2",p2.x); line.setAttribute("y2",p2.y);\n      line.setAttribute("class","tick"); ticks.appendChild(line);\n      const t = document.createElementNS("http://www.w3.org/2000/svg","text");\n      t.setAttribute("x",label.x); t.setAttribute("y",label.y+3);\n      t.setAttribute("text-anchor","middle"); t.setAttribute("class","tick-label");\n      t.textContent = Number(min + (max-min)*i/4).toFixed(step < 1 ? 1 : 0);\n      ticks.appendChild(t);\n    }\n    hit.setAttribute("d", arcPath(radius, 180, 360));\n  }\n  function sendValue(v) {\n    const snapped = Math.min(max, Math.max(min, min + Math.round((v-min)/step)*step));\n    const decimals = step < 1 ? Math.max(1, (String(step).split(".")[1] || "").length) : 0;\n    value = Number(snapped.toFixed(decimals));\n    render();\n    window.parent.postMessage({\n      isStreamlitMessage: true,\n      type: "streamlit:setComponentValue",\n      value: value\n    }, "*");\n  }\n  function setFromPointer(evt) {\n    const pt = svg.createSVGPoint(); pt.x = evt.clientX; pt.y = evt.clientY;\n    const screen = pt.matrixTransform(svg.getScreenCTM().inverse());\n    let a = Math.atan2(screen.y-cy, screen.x-cx) * 180/Math.PI;\n    // Map the lower semicircle from left (180°) to right (360°).\n    if (a < 0) a += 360;\n    a = Math.max(180, Math.min(360, a));\n    sendValue(min + ((a-180)/180)*(max-min));\n  }\n  hit.addEventListener("pointerdown", e => {\n    dragging = true; hit.setPointerCapture(e.pointerId); setFromPointer(e);\n  });\n  hit.addEventListener("pointermove", e => { if (dragging) setFromPointer(e); });\n  hit.addEventListener("pointerup", () => { dragging = false; });\n  hit.addEventListener("pointercancel", () => { dragging = false; });\n\n  let titleText = "GAUGE";\n  function onRender(event) {\n    const d = event.data || {};\n    if (d.type !== "streamlit:render") return;\n    const args = d.args || {};\n    min = Number(args.min_value ?? 0);\n    max = Number(args.max_value ?? 100);\n    step = Number(args.step ?? 1);\n    suffix = args.suffix || "";\n    titleText = args.label || "GAUGE";\n    value = Math.min(max, Math.max(min, Number(args.value ?? min)));\n    render();\n    window.parent.postMessage({isStreamlitMessage:true,type:"streamlit:setFrameHeight",height:205},"*");\n  }\n  window.addEventListener("message", onRender);\n  window.parent.postMessage({isStreamlitMessage:true,type:"streamlit:componentReady",apiVersion:1},"*");\n})();\n</script>\n</body>\n</html>'
+DIAL_HTML = '<!doctype html>\n<html>\n<head>\n<meta charset="utf-8">\n<style>\n  html, body { margin:0; padding:0; background:transparent; overflow:hidden;\n    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }\n  .wrap { width:100%; height:205px; display:flex; align-items:center; justify-content:center; }\n  svg { width:100%; max-width:310px; height:205px; overflow:visible; touch-action:none; user-select:none; }\n  .track { fill:none; stroke:#263d57; stroke-width:18; stroke-linecap:butt; }\n  .progress { fill:none; stroke:#38bdf8; stroke-width:7; stroke-linecap:butt; }\n  .needle { stroke:#2dd4bf; stroke-width:3.5; stroke-linecap:round; }\n  .hub { fill:#2dd4bf; stroke:#0b1220; stroke-width:2; }\n  .tick { stroke:#8ca4bd; stroke-width:1; opacity:.8; }\n  .tick-label { fill:#9fb2c9; font-size:9px; }\n  .value { fill:#e7eef8; font-size:21px; font-weight:600; text-anchor:middle; }\n  .title { fill:#a9bfd3; font-size:11px; text-anchor:middle; font-weight:600; letter-spacing:.3px; }\n  .hit { fill:transparent; stroke:transparent; stroke-width:42; cursor:grab; }\n  .hit:active { cursor:grabbing; }\n</style>\n</head>\n<body>\n<div class="wrap">\n<svg id="dial" viewBox="0 0 300 205" role="img" aria-label="Adjustable semicircular gauge">\n  <path id="track" class="track"></path>\n  <path id="progress" class="progress"></path>\n  <g id="ticks"></g>\n  <text id="title" class="title" x="150" y="18"></text>\n  <text id="value" class="value" x="150" y="145"></text>\n  <line id="needle" class="needle"></line>\n  <circle id="hub" class="hub" r="5"></circle>\n  <path id="hit" class="hit"></path>\n</svg>\n</div>\n<script>\n(function () {\n  const svg = document.getElementById("dial");\n  const track = document.getElementById("track");\n  const progress = document.getElementById("progress");\n  const ticks = document.getElementById("ticks");\n  const title = document.getElementById("title");\n  const valueText = document.getElementById("value");\n  const needle = document.getElementById("needle");\n  const hub = document.getElementById("hub");\n  const hit = document.getElementById("hit");\n  const cx = 150, cy = 150, radius = 116;\n  let min = 0, max = 100, value = 50, step = 1, suffix = "", dragging = false;\n\n  function point(deg, r) {\n    const a = deg * Math.PI / 180;\n    return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };\n  }\n  function arcPath(r, start, end) {\n    const p1 = point(start, r), p2 = point(end, r);\n    return `M ${p1.x} ${p1.y} A ${r} ${r} 0 0 1 ${p2.x} ${p2.y}`;\n  }\n  function fmt(v) {\n    const decimals = step < 1 ? Math.max(1, (String(step).split(".")[1] || "").length) : 0;\n    return Number(v).toFixed(decimals) + suffix;\n  }\n  function render() {\n    const ratio = Math.max(0, Math.min(1, (value - min) / (max - min)));\n    const angle = 180 + ratio * 180;\n    track.setAttribute("d", arcPath(radius, 180, 360));\n    progress.setAttribute("d", arcPath(radius, 180, angle));\n    title.textContent = titleText;\n    valueText.textContent = fmt(value);\n    const p = point(angle, radius - 1);\n    const inner = point(angle, radius - 19);\n    needle.setAttribute("x1", inner.x); needle.setAttribute("y1", inner.y);\n    needle.setAttribute("x2", p.x); needle.setAttribute("y2", p.y);\n    hub.setAttribute("cx", cx); hub.setAttribute("cy", cy);\n    ticks.innerHTML = "";\n    for (let i = 0; i <= 4; i++) {\n      const a = 180 + i * 45, p1 = point(a, radius + 4), p2 = point(a, radius + 11);\n      const label = point(a, radius + 24);\n      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");\n      line.setAttribute("x1",p1.x); line.setAttribute("y1",p1.y);\n      line.setAttribute("x2",p2.x); line.setAttribute("y2",p2.y);\n      line.setAttribute("class","tick"); ticks.appendChild(line);\n      const t = document.createElementNS("http://www.w3.org/2000/svg","text");\n      t.setAttribute("x",label.x); t.setAttribute("y",label.y+3);\n      t.setAttribute("text-anchor","middle"); t.setAttribute("class","tick-label");\n      t.textContent = Number(min + (max-min)*i/4).toFixed(step < 1 ? 1 : 0);\n      ticks.appendChild(t);\n    }\n    hit.setAttribute("d", arcPath(radius, 180, 360));\n  }\n  function sendValue(v) {\n    const snapped = Math.min(max, Math.max(min, min + Math.round((v-min)/step)*step));\n    const decimals = step < 1 ? Math.max(1, (String(step).split(".")[1] || "").length) : 0;\n    value = Number(snapped.toFixed(decimals));\n    render();\n    window.parent.postMessage({\n      isStreamlitMessage: true,\n      type: "streamlit:setComponentValue",\n      value: value\n    }, "*");\n  }\n  function setFromPointer(evt) {\n    const pt = svg.createSVGPoint(); pt.x = evt.clientX; pt.y = evt.clientY;\n    const screen = pt.matrixTransform(svg.getScreenCTM().inverse());\n    let a = Math.atan2(screen.y-cy, screen.x-cx) * 180/Math.PI;\n    // Map the lower semicircle from left (180°) to right (360°).\n    if (a < 0) a += 360;\n    a = Math.max(180, Math.min(360, a));\n    sendValue(min + ((a-180)/180)*(max-min));\n  }\n  hit.addEventListener("pointerdown", e => {\n    dragging = true; hit.setPointerCapture(e.pointerId); setFromPointer(e);\n  });\n  hit.addEventListener("pointermove", e => { if (dragging) setFromPointer(e); });\n  hit.addEventListener("pointerup", () => { dragging = false; });\n  hit.addEventListener("pointercancel", () => { dragging = false; });\n\n  let titleText = "GAUGE";\n  function onRender(event) {\n    const d = event.data || {};\n    if (d.type !== "streamlit:render") return;\n    const args = d.args || {};\n    min = Number(args.min_value ?? 0);\n    max = Number(args.max_value ?? 100);\n    step = Number(args.step ?? 1);\n    suffix = args.suffix || "";\n    titleText = args.label || "GAUGE";\n    value = Math.min(max, Math.max(min, Number(args.value ?? min)));\n    render();\n    window.parent.postMessage({isStreamlitMessage:true,type:"streamlit:setFrameHeight",height:220},"*");\n  }\n  window.addEventListener("message", onRender);\n  window.parent.postMessage({isStreamlitMessage:true,type:"streamlit:componentReady",apiVersion:1},"*");\n})();\n</script>\n</body>\n</html>'
 (DIAL_DIR / "index.html").write_text(DIAL_HTML, encoding="utf-8")
 
 # Interactive semicircular automotive-style gauge component
@@ -43,6 +43,7 @@ st.markdown("""
     --muted: #91a4bb;
     --cyan: #38bdf8;
     --teal: #2dd4bf;
+    --amber: #fbbf24;
 }
 html, body, [class*="css"] {
     font-family: 'Inter', sans-serif;
@@ -137,6 +138,50 @@ hr { border-color: #263a52; }
 }
 .result-title { font-size: 1.45rem; font-weight: 800; }
 .small-muted { color: #9fb2c9; font-size: .85rem; }
+.machine-visual {
+    position: relative; overflow: hidden; min-height: 390px;
+    border: 1px solid rgba(67,104,139,.58); border-radius: 22px;
+    padding: 22px 24px 12px;
+    background:
+      radial-gradient(ellipse at 76% 52%, rgba(56,189,248,.13), transparent 43%),
+      radial-gradient(ellipse at 18% 15%, rgba(45,212,191,.10), transparent 35%),
+      linear-gradient(135deg, rgba(19,35,55,.98), rgba(8,17,31,.98));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.035), 0 16px 40px rgba(0,0,0,.18);
+}
+.machine-visual:before {
+    content:""; position:absolute; width:310px; height:310px; right:7%; top:25px;
+    border:1px solid rgba(56,189,248,.12); border-radius:50%;
+    box-shadow: 0 0 0 22px rgba(56,189,248,.025), 0 0 0 48px rgba(56,189,248,.018);
+    pointer-events:none;
+}
+.machine-topline { display:flex; justify-content:space-between; align-items:center; gap:12px; position:relative; z-index:1; }
+.machine-kicker { color:#72d8ef; font-size:.70rem; letter-spacing:2px; font-weight:800; }
+.machine-chip { color:#a9f4e8; border:1px solid rgba(45,212,191,.34); background:rgba(45,212,191,.08);
+    border-radius:999px; padding:5px 10px; font-size:.68rem; font-weight:700; letter-spacing:.6px; }
+.machine-name { color:#f1f7ff; font-size:1.35rem; font-weight:850; margin-top:7px; position:relative; z-index:1; }
+.machine-sub { color:#9fb2c9; font-size:.82rem; margin-top:2px; position:relative; z-index:1; }
+.machine-image { position:relative; z-index:1; margin-top:2px; }
+.machine-image img { width:100%; max-height:390px; object-fit:contain; filter: drop-shadow(0 18px 22px rgba(0,0,0,.45)); }
+.machine-footer { display:flex; flex-wrap:wrap; gap:9px; margin-top:2px; position:relative; z-index:1; }
+.machine-stat { flex:1; min-width:125px; border:1px solid rgba(111,147,180,.20); background:rgba(9,20,34,.55);
+    border-radius:11px; padding:9px 12px; }
+.machine-stat b { display:block; color:#dceaf7; font-size:.76rem; letter-spacing:.4px; }
+.machine-stat span { color:#8fa8c0; font-size:.68rem; }
+ .machine-image-stage {
+    width:100%; height:350px; margin-top:18px; padding:12px 18px;
+    display:flex; align-items:center; justify-content:center;
+    box-sizing:border-box; overflow:hidden; border-radius:16px;
+    background:linear-gradient(145deg,#e8edf2,#dce5ed);
+    border:1px solid rgba(210,225,238,.30);
+}
+.machine-image-stage img {
+    display:block; width:100%; height:100%; max-width:100%;
+    object-fit:contain; object-position:center center;
+    mix-blend-mode:multiply;
+}
+@media (max-width: 900px) {
+    .machine-image-stage { height:280px; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -184,6 +229,48 @@ engine_models = [
     "5039 D", "5050 D", "5310", "575 DI", "585 DI",
     "735 FE", "744 FE", "855 FE", "Arjun 605"
 ]
+
+
+# Tractor photographs shown when the corresponding engine model is selected.
+# Image URLs are from manufacturer or tractor-information websites.
+engine_model_images = {
+    "5039 D": {
+        "url": "https://www.deere.co.in/assets/images/5039_D_large_da1f1c92d2fcc28389f22fbf9a5df12ccecb7252.jpg",
+        "source": "John Deere India"
+    },
+    "5050 D": {
+        "url": "https://www.deere.co.in/assets/images/region-1/products/tractors/d-series-tractors/5050-D.jpg",
+        "source": "John Deere India"
+    },
+    "5310": {
+        "url": "https://www.deere.co.in/assets/images/region-1/products/tractors/e-series-tractors/john-deere-india-trem%204-5310-right-angle.png",
+        "source": "John Deere India"
+    },
+    "575 DI": {
+        "url": "https://backend.hellokisaan.com/public/assets/images/upload/tractor/orignals/mahindra-575-di-tractor-1735368862.webp",
+        "source": "Hello Kisaan"
+    },
+    "585 DI": {
+        "url": "https://backend.hellokisaan.com/public/assets/images/upload/tractor/orignals/mahindra-585-di-sarpanch-tractor-1735387406.webp",
+        "source": "Hello Kisaan"
+    },
+    "735 FE": {
+        "url": "https://tractorguru.in/blog/wp-content/uploads/2021/02/735-fe-1591424136.jpg",
+        "source": "Tractor Guru"
+    },
+    "744 FE": {
+        "url": "https://cpimg.tistatic.com/07760644/b/4/744FE-Swaraj-Tractor-45-HP.jpg",
+        "source": "TradeIndia"
+    },
+    "855 FE": {
+        "url": "https://www.swarajtractors.com/sites/default/files/images/swaraj_855FE_633x512px_1_010923.png",
+        "source": "Swaraj Tractors"
+    },
+    "Arjun 605": {
+        "url": "https://www.mahindratractor.com/sites/default/files/2025-09/arjun_605_di_ms_new.png",
+        "source": "Mahindra Tractors"
+    }
+}
 
 fault_descriptions = {
     "excessive_vibration": "Excessive Vibration",
@@ -263,24 +350,75 @@ st.markdown("""
 # 7. TRACTOR DETAILS
 # =====================================================
 st.markdown("### 01  |  Tractor identification")
-details_col1, details_col2, details_col3 = st.columns([1, 1, 2])
+details_col1, details_col2 = st.columns([0.78, 1.65], gap="large")
 
 with details_col1:
+    st.markdown("#### MACHINE SETUP")
     brand = st.selectbox("Tractor brand", list(brand_mapping.keys()))
-
-with details_col2:
     model_name = st.selectbox("Engine model", engine_models)
-
-with details_col3:
     st.markdown(
         f"""
-        <div style="background:#142238;border:1px solid #29415d;
-                    border-radius:13px;padding:13px 17px;margin-top:7px;">
-          <div class="small-muted">SELECTED MACHINE</div>
-          <div style="font-size:1.15rem;font-weight:750;color:#e7eef8;">
+        <div class="machine-footer" style="margin-top:18px;">
+          <div class="machine-stat">
+            <b>INPUT MODE</b><span>Manual operating values</span>
+          </div>
+          <div class="machine-stat">
+            <b>HEALTH ANALYSIS</b><span>ML prediction ready</span>
+          </div>
+          <div class="machine-stat">
+            <b>INSTRUMENTS</b><span>Interactive live gauges</span>
+          </div>
+        </div>
+        <div style="margin-top:20px;padding:15px 16px;border-radius:14px;
+                    border:1px solid rgba(56,189,248,.18);
+                    background:linear-gradient(120deg,rgba(56,189,248,.08),rgba(45,212,191,.035));">
+          <div class="machine-kicker">POWERTRAIN PROFILE</div>
+          <div style="font-size:.88rem;font-weight:750;color:#e7eef8;margin-top:7px;">
             {brand} · {model_name}
           </div>
-          <div class="small-muted">Model inputs are supplied manually</div>
+          <div class="machine-sub">Selected tractor configuration</div>
+          <div style="height:1px;background:rgba(139,170,199,.16);margin:13px 0;"></div>
+          <div style="display:flex;align-items:center;gap:8px;color:#9fb2c9;font-size:.75rem;">
+            <span style="width:7px;height:7px;border-radius:50%;background:#2dd4bf;
+                         box-shadow:0 0 10px #2dd4bf;display:inline-block;"></span>
+            READY FOR PARAMETER INPUT
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+with details_col2:
+    selected_image = engine_model_images.get(model_name)
+    image_html = ""
+    if selected_image:
+        image_html = f"""
+          <div class="machine-image-stage">
+            <img src="{selected_image["url"]}" alt="{brand} {model_name} tractor">
+          </div>
+        """
+    else:
+        image_html = """
+          <div class="machine-image-stage">
+            <div style="color:#60758a;font-weight:700;">TRACTOR IMAGE NOT AVAILABLE</div>
+          </div>
+        """
+
+    st.markdown(
+        f"""
+        <div class="machine-visual">
+          <div class="machine-topline">
+            <div class="machine-kicker">SELECTED MACHINE / LIVE PROFILE</div>
+            <div class="machine-chip">● MODEL SELECTED</div>
+          </div>
+          <div class="machine-name">{brand} {model_name}</div>
+          <div class="machine-sub">Tractor reference image · model-specific view</div>
+          {image_html}
+          <div class="machine-footer">
+            <div class="machine-stat"><b>ENGINE MONITORING</b><span>Speed · load · temperature</span></div>
+            <div class="machine-stat"><b>CONDITION CHECK</b><span>Health and fault classification</span></div>
+            <div class="machine-stat"><b>CONTROL PANEL</b><span>Drag the gauge needles to adjust</span></div>
+          </div>
         </div>
         """,
         unsafe_allow_html=True
@@ -352,20 +490,14 @@ st.markdown(
 g1, g2, g3, g4 = st.columns(4)
 show_gauge(g1, "ENGINE SPEED", rpm, 500, 2400, " rpm", key="rpm", step=25)
 show_gauge(g2, "ENGINE LOAD", load, 0, 100, "%", key="load", step=1)
-show_gauge(g3, "COOLANT TEMPERATURE", coolant_temp,
-           0, 150, " °C", key="coolant_temp", step=1)
-show_gauge(g4, "EXHAUST TEMPERATURE", exhaust_temp,
-           0, 600, " °C", key="exhaust_temp", step=5)
+show_gauge(g3, "COOLANT TEMPERATURE", coolant_temp, 0, 150, " °C", key="coolant_temp", step=1)
+show_gauge(g4, "EXHAUST TEMPERATURE", exhaust_temp, 0, 600, " °C", key="exhaust_temp", step=5)
 
 g5, g6, g7, g8 = st.columns(4)
-show_gauge(g5, "OIL PRESSURE", oil_pressure, 0, 10,
-           " bar", key="oil_pressure", step=0.1)
-show_gauge(g6, "OIL TEMPERATURE", oil_temp, 0,
-           200, " °C", key="oil_temp", step=1)
-show_gauge(g7, "VIBRATION RMS", vibration, 0, 10,
-           " mm/s", key="vibration", step=0.1)
-show_gauge(g8, "FUEL RATE", fuel_rate, 0, 50,
-           " L/h", key="fuel_rate", step=0.5)
+show_gauge(g5, "OIL PRESSURE", oil_pressure, 0, 10, " bar", key="oil_pressure", step=0.1)
+show_gauge(g6, "OIL TEMPERATURE", oil_temp, 0, 200, " °C", key="oil_temp", step=1)
+show_gauge(g7, "VIBRATION RMS", vibration, 0, 10, " mm/s", key="vibration", step=0.1)
+show_gauge(g8, "FUEL RATE", fuel_rate, 0, 50, " L/h", key="fuel_rate", step=0.5)
 
 m1, m2, m3 = st.columns(3)
 m1.metric("Ambient temperature", f"{ambient_temp} °C")
@@ -408,8 +540,7 @@ if predict_clicked:
     if model_name != "5039 D":
         selected_dummy = "engine_model_" + model_name
         if selected_dummy not in expected_columns:
-            st.error(
-                f"Feature not found in the trained model: {selected_dummy}")
+            st.error(f"Feature not found in the trained model: {selected_dummy}")
             st.stop()
         input_df[selected_dummy] = 1
 
@@ -458,8 +589,7 @@ if predict_clicked:
         """, unsafe_allow_html=True)
 
         st.markdown("#### Fault classification")
-        st.success(
-            "No fault classification was run because the health model predicted HEALTHY.")
+        st.success("No fault classification was run because the health model predicted HEALTHY.")
 
     elif health_prediction == 0:
         st.markdown("""
@@ -474,8 +604,7 @@ if predict_clicked:
 
         # Model 2: fault classification, run only for abnormal prediction.
         fault_prediction = fault_model.predict(input_df)[0]
-        fault_name = fault_descriptions.get(
-            fault_prediction, str(fault_prediction))
+        fault_name = fault_descriptions.get(fault_prediction, str(fault_prediction))
         explanation = fault_explanations.get(
             fault_prediction,
             "Further engine inspection is recommended."
